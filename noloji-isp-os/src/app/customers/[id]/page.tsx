@@ -14,6 +14,7 @@ import {
   ArrowLeft, Edit, Save, X, User, Phone, Mail,
   MapPin, Calendar, Package, Activity, Wifi, Cable, Trash2, Signal, Router
 } from 'lucide-react';
+import { DateTimePicker } from '@/components/ui/datetime-picker';
 
 export default function CustomerDetailPage() {
   const router = useRouter();
@@ -25,6 +26,10 @@ export default function CustomerDetailPage() {
   const [editing, setEditing] = useState(false);
   const [packages, setPackages] = useState<any[]>([]);
   const [routers, setRouters] = useState<any[]>([]);
+
+  // Quick expiry edit state
+  const [showExpiryDialog, setShowExpiryDialog] = useState(false);
+  const [quickExpiryDate, setQuickExpiryDate] = useState<Date | undefined>(undefined);
 
   // CPE State
   const [cpe, setCpe] = useState<any>(null);
@@ -72,6 +77,7 @@ export default function CustomerDetailPage() {
         .single();
 
       if (error) throw error;
+      if (!data) throw new Error('Customer not found');
 
       const customerData = {
         ...data,
@@ -292,27 +298,44 @@ export default function CustomerDetailPage() {
   };
 
   const handleDelete = async () => {
-    if (!confirm(`Are you sure you want to delete customer "${customer.username}"? This cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to delete customer "${customer.username}"? This will also remove them from the MikroTik router. This cannot be undone.`)) {
       return;
     }
 
     try {
       setLoading(true);
 
-      // Delete from MikroTik first (handles both Hotspot and PPPoE)
+      // Delete from MikroTik first (mandatory - blocks database deletion if this fails)
+      const mikrotikServiceUrl = process.env.NEXT_PUBLIC_MIKROTIK_URL || 'http://localhost:3002';
+
       try {
-        const mikrotikServiceUrl = process.env.NEXT_PUBLIC_MIKROTIK_URL || 'http://localhost:3002';
         const mikrotikResponse = await fetch(`${mikrotikServiceUrl}/api/customers/${customerId}/remove-from-mikrotik`, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' }
         });
+
+        if (!mikrotikResponse.ok) {
+          const errorData = await mikrotikResponse.json();
+          throw new Error(errorData.error || 'MikroTik service returned an error');
+        }
+
         const mikrotikResult = await mikrotikResponse.json();
+
+        if (!mikrotikResult.success) {
+          throw new Error(mikrotikResult.error || 'Failed to remove from MikroTik');
+        }
+
         console.log('MikroTik delete result:', mikrotikResult);
-      } catch (syncError) {
-        console.log('MikroTik delete skipped:', syncError);
+      } catch (mikrotikError: any) {
+        // If no router assigned, we can proceed with deletion
+        if (mikrotikError.message?.includes('No router assigned')) {
+          console.log('No router assigned, proceeding with database deletion');
+        } else {
+          throw new Error(`Cannot delete: ${mikrotikError.message || 'Failed to remove customer from MikroTik router. Please ensure the MikroTik service is running.'}`);
+        }
       }
 
-      // Delete from database
+      // Delete from database (only after successful MikroTik deletion)
       const { error } = await supabase
         .from('customers')
         .delete()
@@ -322,7 +345,7 @@ export default function CustomerDetailPage() {
 
       toast({
         title: 'Success',
-        description: 'Customer deleted successfully'
+        description: 'Customer deleted from both database and MikroTik router'
       });
 
       router.push('/customers');
@@ -330,6 +353,41 @@ export default function CustomerDetailPage() {
       toast({
         title: 'Error',
         description: error.message || 'Failed to delete customer',
+        variant: 'destructive'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleQuickExpiryUpdate = async () => {
+    if (!quickExpiryDate) return;
+
+    try {
+      setLoading(true);
+
+      // Convert Date to ISO string for database storage
+      const expiryDateString = quickExpiryDate.toISOString();
+
+      const { error } = await supabase
+        .from('customers')
+        .update({ valid_until: expiryDateString })
+        .eq('id', parseInt(customerId));
+
+      if (error) throw error;
+
+      toast({
+        title: 'Success',
+        description: `Subscription expiry updated to ${quickExpiryDate.toLocaleString()}`
+      });
+
+      setShowExpiryDialog(false);
+      setQuickExpiryDate(undefined);
+      loadCustomer(); // Refresh customer data
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to update expiry date',
         variant: 'destructive'
       });
     } finally {
@@ -490,11 +548,89 @@ export default function CustomerDetailPage() {
                 <div className="flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-muted-foreground" />
                   <span className="font-medium">Expiry:</span>
-                  <span>{formatDate(customer.valid_until)}</span>
+                  <span className={customer.valid_until && new Date(customer.valid_until) < new Date() ? 'text-red-600' : ''}>
+                    {formatDate(customer.valid_until)}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => setShowExpiryDialog(true)}
+                  >
+                    <Edit className="w-3 h-3 mr-1" />
+                    Edit
+                  </Button>
                 </div>
               </div>
             </Card>
           </div>
+
+          {/* Quick Expiry Date Edit Dialog */}
+          {showExpiryDialog && (
+            <Card className="p-4 mt-4 border-2 border-primary">
+              <h4 className="font-semibold mb-3 flex items-center gap-2">
+                <Calendar className="w-4 h-4" />
+                Change Subscription Expiry Date
+              </h4>
+              <div className="flex flex-wrap gap-4 items-end">
+                <div className="flex-1 min-w-[240px]">
+                  <Label>New Expiry Date & Time</Label>
+                  <DateTimePicker
+                    date={quickExpiryDate}
+                    setDate={setQuickExpiryDate}
+                    placeholder="Select expiry date & time"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const newDate = new Date();
+                      newDate.setDate(newDate.getDate() + 7);
+                      newDate.setHours(23, 59, 0, 0);
+                      setQuickExpiryDate(newDate);
+                    }}
+                  >
+                    +7 Days
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const newDate = new Date();
+                      newDate.setDate(newDate.getDate() + 30);
+                      newDate.setHours(23, 59, 0, 0);
+                      setQuickExpiryDate(newDate);
+                    }}
+                  >
+                    +30 Days
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const newDate = new Date();
+                      newDate.setDate(newDate.getDate() + 365);
+                      newDate.setHours(23, 59, 0, 0);
+                      setQuickExpiryDate(newDate);
+                    }}
+                  >
+                    +1 Year
+                  </Button>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-4">
+                <Button onClick={handleQuickExpiryUpdate} disabled={loading || !quickExpiryDate}>
+                  <Save className="w-4 h-4 mr-2" />
+                  Update Expiry
+                </Button>
+                <Button variant="outline" onClick={() => setShowExpiryDialog(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="details">
@@ -836,6 +972,6 @@ export default function CustomerDetailPage() {
           </div>
         </TabsContent>
       </Tabs>
-    </div>
+    </div >
   );
 }

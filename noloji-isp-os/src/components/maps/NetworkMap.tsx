@@ -40,23 +40,42 @@ interface GISLabel {
     color: string;
 }
 
+interface NetworkPoint {
+    id: number;
+    name: string;
+    description?: string;
+    point_type: string;
+    latitude: number;
+    longitude: number;
+    capacity: number;
+    used_ports: number;
+    available_signals: string[];
+    customer_ids: number[];
+    status: string;
+    color: string;
+}
+
 interface NetworkMapProps {
     center?: [number, number];
     zoom?: number;
     customers?: Customer[];
     fiberCables?: FiberCable[];
     labels?: GISLabel[];
-    drawingMode?: 'none' | 'line' | 'marker' | 'delete';
+    networkPoints?: NetworkPoint[];
+    drawingMode?: 'none' | 'line' | 'marker' | 'delete' | 'network_point' | 'customer_pin';
     drawingPoints?: [number, number][];
     onCustomerClick?: (customer: Customer) => void;
     onCableClick?: (cable: FiberCable) => void;
     onLabelClick?: (label: GISLabel) => void;
+    onNetworkPointClick?: (point: NetworkPoint) => void;
     onMapClick?: (lat: number, lng: number) => void;
     onLineClick?: (lat: number, lng: number) => void;
+    onSnapToEndpoint?: (cableName: string) => void;
     showLayers?: {
         customers: boolean;
         cables: boolean;
         labels: boolean;
+        networkPoints: boolean;
     };
 }
 
@@ -66,14 +85,17 @@ function NetworkMapClient({
     customers = [],
     fiberCables = [],
     labels = [],
+    networkPoints = [],
     drawingMode = 'none',
     drawingPoints = [],
     onCustomerClick,
     onCableClick,
     onLabelClick,
+    onNetworkPointClick,
     onMapClick,
     onLineClick,
-    showLayers = { customers: true, cables: true, labels: true }
+    onSnapToEndpoint,
+    showLayers = { customers: true, cables: true, labels: true, networkPoints: true }
 }: NetworkMapProps) {
     const [isReady, setIsReady] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -238,6 +260,50 @@ function NetworkMapClient({
         });
     };
 
+    // Calculate distance between two points in meters (Haversine formula)
+    const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+        const R = 6371000; // Earth's radius in meters
+        const toRad = (deg: number) => deg * (Math.PI / 180);
+        const dLat = toRad(lat2 - lat1);
+        const dLng = toRad(lng2 - lng1);
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+            Math.sin(dLng / 2) * Math.sin(dLng / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    };
+
+    // Get all cable endpoints for snapping
+    const getCableEndpoints = (): { lat: number; lng: number; cableId: number; cableName: string; isStart: boolean }[] => {
+        const endpoints: { lat: number; lng: number; cableId: number; cableName: string; isStart: boolean }[] = [];
+        fiberCables.forEach(cable => {
+            if (cable.coordinates && cable.coordinates.length >= 2) {
+                const first = cable.coordinates[0];
+                const last = cable.coordinates[cable.coordinates.length - 1];
+                endpoints.push({ lat: first[0], lng: first[1], cableId: cable.id, cableName: cable.name, isStart: true });
+                endpoints.push({ lat: last[0], lng: last[1], cableId: cable.id, cableName: cable.name, isStart: false });
+            }
+        });
+        return endpoints;
+    };
+
+    // Find nearest cable endpoint within snap threshold
+    const findNearestEndpoint = (lat: number, lng: number, thresholdMeters: number = 15): { lat: number; lng: number; cableName: string } | null => {
+        const endpoints = getCableEndpoints();
+        let nearest: { lat: number; lng: number; cableName: string; distance: number } | null = null;
+
+        for (const ep of endpoints) {
+            const distance = calculateDistance(lat, lng, ep.lat, ep.lng);
+            if (distance <= thresholdMeters) {
+                if (!nearest || distance < nearest.distance) {
+                    nearest = { lat: ep.lat, lng: ep.lng, cableName: ep.cableName, distance };
+                }
+            }
+        }
+
+        return nearest ? { lat: nearest.lat, lng: nearest.lng, cableName: nearest.cableName } : null;
+    };
+
     // Map click handler component
     const MapClickHandler = () => {
         const map = useMapEvents({
@@ -246,7 +312,19 @@ function NetworkMapClient({
                 if (drawingModeRef.current === 'marker' && onMapClick) {
                     onMapClick(e.latlng.lat, e.latlng.lng);
                 } else if (drawingModeRef.current === 'line' && onLineClick) {
-                    onLineClick(e.latlng.lat, e.latlng.lng);
+                    // Check for snap to existing cable endpoint
+                    const snapPoint = findNearestEndpoint(e.latlng.lat, e.latlng.lng);
+                    if (snapPoint) {
+                        console.log(`Snapped to cable: ${snapPoint.cableName}`);
+                        onLineClick(snapPoint.lat, snapPoint.lng);
+                        onSnapToEndpoint && onSnapToEndpoint(snapPoint.cableName);
+                    } else {
+                        onLineClick(e.latlng.lat, e.latlng.lng);
+                    }
+                } else if (drawingModeRef.current === 'network_point' && onMapClick) {
+                    onMapClick(e.latlng.lat, e.latlng.lng);
+                } else if (drawingModeRef.current === 'customer_pin' && onMapClick) {
+                    onMapClick(e.latlng.lat, e.latlng.lng);
                 }
             }
         });
@@ -259,8 +337,61 @@ function NetworkMapClient({
         return null;
     };
 
+    // Create network point icon
+    const createNetworkPointIcon = (type: string, color: string, capacity: number, usedPorts: number) => {
+        const icons: Record<string, string> = {
+            'fat': '🔌',
+            'closure': '📦',
+            'splitter': '🔀',
+            'olt': '📡',
+            'fdt': '📤'
+        };
+        const utilization = capacity > 0 ? (usedPorts / capacity) * 100 : 0;
+        const ringColor = utilization > 80 ? '#ef4444' : utilization > 50 ? '#f97316' : '#22c55e';
+
+        return new L.DivIcon({
+            className: 'custom-div-icon',
+            html: `<div style="
+                width: 32px;
+                height: 32px;
+                background: ${color || '#f97316'};
+                border: 3px solid ${ringColor};
+                border-radius: 8px;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 16px;
+                cursor: pointer;
+            ">${icons[type] || '🔌'}</div>`,
+            iconSize: [32, 32],
+            iconAnchor: [16, 16]
+        });
+    };
+
+    // Calculate cable weight based on type and core count
+    const getCableWeight = (cableType: string, fiberCount?: number): number => {
+        switch (cableType) {
+            case 'drop':
+                return 2; // Very thin for drop cables
+            case 'adss':
+                // ADSS thickness varies by core count
+                if (!fiberCount) return 4;
+                if (fiberCount <= 12) return 4;
+                if (fiberCount <= 24) return 5;
+                if (fiberCount <= 48) return 6;
+                if (fiberCount <= 72) return 7;
+                return 8; // 96 cores or more
+            case 'trunk':
+                return 6;
+            case 'fiber':
+            default:
+                return 4;
+        }
+    };
+
     // Cursor style based on drawing mode
-    const cursorStyle = (drawingMode === 'marker' || drawingMode === 'line') ? 'crosshair' : 'grab';
+    const cursorStyle = ['marker', 'line', 'network_point', 'customer_pin'].includes(drawingMode) ? 'crosshair' : 'grab';
 
     return (
         <div style={{ height: '100%', width: '100%', cursor: cursorStyle }}>
@@ -298,11 +429,11 @@ function NetworkMapClient({
                         icon={new L.DivIcon({
                             className: 'custom-div-icon',
                             html: `<div style="
-                                width: 12px; 
-                                height: 12px; 
-                                background: #f97316; 
-                                border: 2px solid white; 
-                                border-radius: 50%; 
+                                width: 12px;
+                                height: 12px;
+                                background: #f97316;
+                                border: 2px solid white;
+                                border-radius: 50%;
                                 box-shadow: 0 2px 4px rgba(0,0,0,0.3);
                             "></div>`,
                             iconSize: [12, 12],
@@ -318,7 +449,7 @@ function NetworkMapClient({
                         positions={cable.coordinates}
                         pathOptions={{
                             color: cable.color || '#3b82f6',
-                            weight: cable.cable_type === 'trunk' ? 5 : 3,
+                            weight: getCableWeight(cable.cable_type, cable.fiber_count),
                             opacity: 0.8,
                             dashArray: cable.status === 'planned' ? '10, 10' : undefined
                         }}
@@ -332,7 +463,7 @@ function NetworkMapClient({
                         <Tooltip sticky>
                             <div>
                                 <strong>{cable.name}</strong><br />
-                                {cable.cable_type} • {cable.fiber_count || 12} cores
+                                {cable.cable_type.toUpperCase()} • {cable.fiber_count || 12} cores
                             </div>
                         </Tooltip>
                     </Polyline>
@@ -360,6 +491,29 @@ function NetworkMapClient({
                     </Marker>
                 ))}
 
+                {/* Network Points (FAT, Closures, etc.) */}
+                {showLayers.networkPoints && networkPoints.map((point) => (
+                    <Marker
+                        key={`network-point-${point.id}`}
+                        position={[point.latitude, point.longitude]}
+                        icon={createNetworkPointIcon(point.point_type, point.color, point.capacity, point.used_ports)}
+                        eventHandlers={{
+                            click: (e: any) => {
+                                e.originalEvent?.stopPropagation();
+                                onNetworkPointClick && onNetworkPointClick(point);
+                            }
+                        }}
+                    >
+                        <Tooltip>
+                            <div>
+                                <strong>{point.name}</strong><br />
+                                <span style={{ textTransform: 'uppercase' }}>{point.point_type}</span><br />
+                                <span>{point.used_ports}/{point.capacity} ports used</span>
+                            </div>
+                        </Tooltip>
+                    </Marker>
+                ))}
+
                 {/* Customer markers */}
                 {showLayers.customers && customers.filter(c => c.latitude && c.longitude).map((customer) => (
                     <Marker
@@ -380,6 +534,54 @@ function NetworkMapClient({
                                 <span style={{ color: customer.is_online ? '#22c55e' : '#ef4444' }}>
                                     {customer.is_online ? '● Online' : '○ Offline'}
                                 </span>
+                            </div>
+                        </Tooltip>
+                    </Marker>
+                ))}
+
+                {/* Cable Endpoint Snap Points - Rendered LAST to appear on top of all markers */}
+                {drawingMode === 'line' && getCableEndpoints().map((endpoint, index) => (
+                    <Marker
+                        key={`snap-point-${index}`}
+                        position={[endpoint.lat, endpoint.lng]}
+                        zIndexOffset={1000}
+                        eventHandlers={{
+                            click: (e: any) => {
+                                e.originalEvent?.stopPropagation();
+                                // Directly trigger the snap when clicking the snap point
+                                if (onLineClick) {
+                                    onLineClick(endpoint.lat, endpoint.lng);
+                                    onSnapToEndpoint && onSnapToEndpoint(endpoint.cableName);
+                                }
+                            }
+                        }}
+                        icon={new L.DivIcon({
+                            className: 'snap-point-icon',
+                            html: `<div style="
+                                width: 20px;
+                                height: 20px;
+                                background: rgba(34, 197, 94, 0.4);
+                                border: 3px solid #22c55e;
+                                border-radius: 50%;
+                                box-shadow: 0 0 12px rgba(34, 197, 94, 0.8), 0 0 20px rgba(34, 197, 94, 0.4);
+                                animation: pulse 1.2s ease-in-out infinite;
+                                cursor: pointer;
+                                z-index: 10000;
+                            "></div>
+                            <style>
+                                @keyframes pulse {
+                                    0%, 100% { transform: scale(1); box-shadow: 0 0 12px rgba(34, 197, 94, 0.8), 0 0 20px rgba(34, 197, 94, 0.4); }
+                                    50% { transform: scale(1.3); box-shadow: 0 0 20px rgba(34, 197, 94, 1), 0 0 30px rgba(34, 197, 94, 0.6); }
+                                }
+                            </style>`,
+                            iconSize: [20, 20],
+                            iconAnchor: [10, 10]
+                        })}
+                    >
+                        <Tooltip>
+                            <div className="text-xs">
+                                <strong>Click to snap</strong><br />
+                                {endpoint.cableName} ({endpoint.isStart ? 'start' : 'end'})
                             </div>
                         </Tooltip>
                     </Marker>

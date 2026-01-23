@@ -1,12 +1,46 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { KPICard } from "@/components/charts/kpi-card";
-import { BandwidthChart } from "@/components/charts/bandwidth-chart";
-import { NetworkMiniMap } from "@/components/charts/network-mini-map";
 import { useDashboardKPIs, useRecentAlerts } from "@/hooks/use-dashboard";
+
+// Dynamically import heavy chart components - reduces initial bundle size
+const BandwidthChart = dynamic(
+  () => import("@/components/charts/bandwidth-chart").then((mod) => mod.BandwidthChart),
+  {
+    loading: () => (
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-40" />
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-[300px] w-full" />
+        </CardContent>
+      </Card>
+    ),
+    ssr: false,
+  }
+);
+
+const NetworkMiniMap = dynamic(
+  () => import("@/components/charts/network-mini-map").then((mod) => mod.NetworkMiniMap),
+  {
+    loading: () => (
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-32" />
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-[200px] w-full" />
+        </CardContent>
+      </Card>
+    ),
+    ssr: false,
+  }
+);
 import { formatCurrency, dateUtils, getStatusColor } from "@/lib/utils";
 import {
   Users,

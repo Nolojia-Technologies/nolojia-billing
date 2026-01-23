@@ -2,11 +2,17 @@
 
 import * as React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 
 interface QueryProviderProps {
   children: React.ReactNode;
 }
+
+// Lazy load devtools only in development
+const ReactQueryDevtools = React.lazy(() =>
+  import("@tanstack/react-query-devtools").then((mod) => ({
+    default: mod.ReactQueryDevtools,
+  }))
+);
 
 export function QueryProvider({ children }: QueryProviderProps) {
   const [queryClient] = React.useState(
@@ -14,16 +20,17 @@ export function QueryProvider({ children }: QueryProviderProps) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            // With SSR, we usually want to set some default staleTime
-            // above 0 to avoid refetching immediately on the client
-            staleTime: 60 * 1000, // 1 minute
-            gcTime: 5 * 60 * 1000, // 5 minutes
+            // Optimized caching - reduce unnecessary refetches
+            staleTime: 5 * 60 * 1000, // 5 minutes - data stays fresh longer
+            gcTime: 30 * 60 * 1000, // 30 minutes - keep in cache longer
+            refetchOnWindowFocus: false, // Don't refetch when tab regains focus
+            refetchOnReconnect: false, // Don't refetch on network reconnect
             retry: (failureCount, error) => {
               // Don't retry on 4xx errors
               if (error instanceof Error && error.message.includes('4')) {
                 return false;
               }
-              return failureCount < 3;
+              return failureCount < 2; // Reduce retry count
             },
           },
           mutations: {
@@ -36,10 +43,11 @@ export function QueryProvider({ children }: QueryProviderProps) {
   return (
     <QueryClientProvider client={queryClient}>
       {children}
-      <ReactQueryDevtools
-        initialIsOpen={false}
-        buttonPosition="bottom-right"
-      />
+      {process.env.NODE_ENV === "development" && (
+        <React.Suspense fallback={null}>
+          <ReactQueryDevtools initialIsOpen={false} buttonPosition="bottom-right" />
+        </React.Suspense>
+      )}
     </QueryClientProvider>
   );
 }

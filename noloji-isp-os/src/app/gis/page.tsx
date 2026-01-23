@@ -1,14 +1,35 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { supabase } from "@/lib/supabase";
 import { toast } from "@/components/ui/use-toast";
-import { NetworkMap } from "@/components/maps/NetworkMap";
+
+const SYNC_INTERVAL = 30000; // 30 seconds
+
+// Dynamically import heavy map component - Leaflet/MapLibre are ~500KB+
+const NetworkMap = dynamic(
+  () => import("@/components/maps/NetworkMap").then((mod) => mod.NetworkMap),
+  {
+    loading: () => (
+      <div className="h-full w-full flex items-center justify-center bg-muted/50">
+        <div className="text-center space-y-4">
+          <Skeleton className="h-12 w-12 rounded-full mx-auto" />
+          <Skeleton className="h-4 w-32 mx-auto" />
+          <p className="text-sm text-muted-foreground">Loading map...</p>
+        </div>
+      </div>
+    ),
+    ssr: false, // Map libraries don't work with SSR
+  }
+);
 import {
   Map,
   Layers,
@@ -26,7 +47,8 @@ import {
   Plus,
   MousePointer,
   Network,
-  Search
+  Search,
+  Radio
 } from "lucide-react";
 
 interface Customer {
@@ -114,6 +136,7 @@ export default function GISPage() {
   // Drawing mode - updated to include network_point and customer_pin
   const [drawingMode, setDrawingMode] = useState<'none' | 'line' | 'marker' | 'delete' | 'network_point' | 'customer_pin'>('none');
   const [drawingPoints, setDrawingPoints] = useState<[number, number][]>([]);
+  const [lastSnappedCable, setLastSnappedCable] = useState<string | null>(null);
 
   // Modal state
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -163,6 +186,30 @@ export default function GISPage() {
     networkPoints: true
   });
 
+  // Real-time sync state
+  const [autoSync, setAutoSync] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [, setTick] = useState(0); // Force re-render for time display
+  const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isMounted = useRef(true);
+
+  // Update time display every 5 seconds
+  useEffect(() => {
+    const tickInterval = setInterval(() => {
+      setTick(t => t + 1);
+    }, 5000);
+    return () => clearInterval(tickInterval);
+  }, []);
+
+  // Track component mount state
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
   const loadData = async () => {
     try {
       setLoading(true);
@@ -173,43 +220,117 @@ export default function GISPage() {
         .select('id, username, full_name, latitude, longitude, is_online, is_active, address, phone, connection_type, plans:plan_id(name)')
         .not('latitude', 'is', null)
         .not('longitude', 'is', null);
-      setCustomers(customersData || []);
+      if (isMounted.current) setCustomers(customersData || []);
 
       // Load fiber cables
       const { data: cablesData } = await supabase
         .from('fiber_cables')
         .select('*');
-      setFiberCables(cablesData || []);
+      if (isMounted.current) setFiberCables(cablesData || []);
 
       // Load labels
       const { data: labelsData } = await supabase
         .from('gis_labels')
         .select('*');
-      setLabels(labelsData || []);
+      if (isMounted.current) setLabels(labelsData || []);
 
       // Load network points
       const { data: networkPointsData } = await supabase
         .from('network_points')
         .select('*');
-      setNetworkPoints(networkPointsData || []);
+      if (isMounted.current) setNetworkPoints(networkPointsData || []);
 
       // Load unlabeled customers (no coordinates)
       const { data: unlabeledData } = await supabase
         .from('customers')
         .select('id, username, full_name, address, phone')
         .or('latitude.is.null,longitude.is.null');
-      setUnlabeledCustomers(unlabeledData || []);
+      if (isMounted.current) setUnlabeledCustomers(unlabeledData || []);
 
     } catch (error: any) {
       console.error('Failed to load GIS data:', error.message);
     } finally {
-      setLoading(false);
+      if (isMounted.current) setLoading(false);
     }
   };
 
+  // Sync online status with MikroTik and reload customers
+  const syncOnlineStatus = async (silent: boolean = false) => {
+    if (!isMounted.current) return;
+
+    if (!silent) setSyncing(true);
+
+    try {
+      // Step 1: Call MikroTik service to sync online status to database
+      const mikrotikServiceUrl = process.env.NEXT_PUBLIC_MIKROTIK_URL || 'http://localhost:3002';
+      await fetch(`${mikrotikServiceUrl}/api/customers/sync-online-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }).catch(() => {
+        // Silently ignore MikroTik errors - we'll still reload from DB
+      });
+
+      // Step 2: Reload customers from database to get updated online status
+      const { data: customersData } = await supabase
+        .from('customers')
+        .select('id, username, full_name, latitude, longitude, is_online, is_active, address, phone, connection_type, plans:plan_id(name)')
+        .not('latitude', 'is', null)
+        .not('longitude', 'is', null);
+
+      if (isMounted.current) {
+        setCustomers(customersData || []);
+        setLastSyncTime(new Date());
+      }
+    } catch (error: any) {
+      console.error('Sync failed:', error.message);
+    } finally {
+      if (isMounted.current && !silent) setSyncing(false);
+    }
+  };
+
+  // Initial load
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Auto-sync interval for online status
+  useEffect(() => {
+    if (autoSync) {
+      // Initial sync after a short delay to let loadData complete first
+      const initialTimeout = setTimeout(() => {
+        syncOnlineStatus(true);
+      }, 1000);
+
+      // Set up interval
+      syncIntervalRef.current = setInterval(() => {
+        syncOnlineStatus(true);
+      }, SYNC_INTERVAL);
+
+      return () => {
+        clearTimeout(initialTimeout);
+        if (syncIntervalRef.current) {
+          clearInterval(syncIntervalRef.current);
+          syncIntervalRef.current = null;
+        }
+      };
+    } else {
+      // Clear interval when autoSync is disabled
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+    }
+  }, [autoSync]);
+
+  const formatLastSyncTime = () => {
+    if (!lastSyncTime) return 'Never';
+    const now = new Date();
+    const diffSeconds = Math.floor((now.getTime() - lastSyncTime.getTime()) / 1000);
+    if (diffSeconds < 60) return `${diffSeconds}s ago`;
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    return `${diffMinutes}m ago`;
+  };
 
   const stats = {
     customers: customers.length,
@@ -217,7 +338,8 @@ export default function GISPage() {
     cables: fiberCables.length,
     labels: labels.length,
     networkPoints: networkPoints.length,
-    unlabeled: unlabeledCustomers.length
+    unlabeled: unlabeledCustomers.length,
+    totalCableLength: fiberCables.reduce((total, cable) => total + (cable.length_meters || 0), 0)
   };
 
   const toggleLayer = (layer: keyof typeof layers) => {
@@ -381,9 +503,107 @@ export default function GISPage() {
 
   // Delete cable
   const deleteCable = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this entire cable?')) return;
     try {
       await supabase.from('fiber_cables').delete().eq('id', id);
       toast({ title: 'Deleted', description: 'Cable removed' });
+      setSelectedCable(null);
+      loadData();
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    }
+  };
+
+  // Trim cable from start (remove first N points)
+  const trimCableFromStart = async (cable: FiberCable, pointsToRemove: number) => {
+    if (cable.coordinates.length <= pointsToRemove + 1) {
+      toast({ title: 'Error', description: 'Cannot trim - would leave less than 2 points', variant: 'destructive' });
+      return;
+    }
+
+    const newCoordinates = cable.coordinates.slice(pointsToRemove);
+    const newLength = calculateCableLength(newCoordinates);
+
+    try {
+      await supabase
+        .from('fiber_cables')
+        .update({
+          coordinates: newCoordinates,
+          length_meters: Math.round(newLength)
+        })
+        .eq('id', cable.id);
+
+      toast({ title: 'Trimmed', description: `Removed ${pointsToRemove} point(s) from start` });
+      setSelectedCable(null);
+      loadData();
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    }
+  };
+
+  // Trim cable from end (remove last N points)
+  const trimCableFromEnd = async (cable: FiberCable, pointsToRemove: number) => {
+    if (cable.coordinates.length <= pointsToRemove + 1) {
+      toast({ title: 'Error', description: 'Cannot trim - would leave less than 2 points', variant: 'destructive' });
+      return;
+    }
+
+    const newCoordinates = cable.coordinates.slice(0, -pointsToRemove);
+    const newLength = calculateCableLength(newCoordinates);
+
+    try {
+      await supabase
+        .from('fiber_cables')
+        .update({
+          coordinates: newCoordinates,
+          length_meters: Math.round(newLength)
+        })
+        .eq('id', cable.id);
+
+      toast({ title: 'Trimmed', description: `Removed ${pointsToRemove} point(s) from end` });
+      setSelectedCable(null);
+      loadData();
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    }
+  };
+
+  // Split cable at a specific point index (creates two cables)
+  const splitCableAtPoint = async (cable: FiberCable, splitIndex: number) => {
+    if (splitIndex < 1 || splitIndex >= cable.coordinates.length - 1) {
+      toast({ title: 'Error', description: 'Invalid split point', variant: 'destructive' });
+      return;
+    }
+
+    const firstHalf = cable.coordinates.slice(0, splitIndex + 1);
+    const secondHalf = cable.coordinates.slice(splitIndex);
+
+    try {
+      // Update original cable with first half
+      await supabase
+        .from('fiber_cables')
+        .update({
+          coordinates: firstHalf,
+          length_meters: Math.round(calculateCableLength(firstHalf)),
+          name: `${cable.name} (Part 1)`
+        })
+        .eq('id', cable.id);
+
+      // Create new cable with second half
+      await supabase
+        .from('fiber_cables')
+        .insert({
+          name: `${cable.name} (Part 2)`,
+          description: cable.description,
+          coordinates: secondHalf,
+          cable_type: cable.cable_type,
+          length_meters: Math.round(calculateCableLength(secondHalf)),
+          fiber_count: cable.fiber_count,
+          status: cable.status,
+          color: cable.color
+        });
+
+      toast({ title: 'Split Complete', description: 'Cable split into two parts' });
       setSelectedCable(null);
       loadData();
     } catch (error: any) {
@@ -439,6 +659,7 @@ export default function GISPage() {
   const cancelDrawing = () => {
     setDrawingMode('none');
     setDrawingPoints([]);
+    setLastSnappedCable(null);
   };
 
   // Update core signals when fiber count changes
@@ -500,6 +721,7 @@ export default function GISPage() {
       setShowAddCableModal(false);
       setDrawingMode('none');
       setDrawingPoints([]);
+      setLastSnappedCable(null);
       setNewCableData({
         name: '',
         cable_type: 'fiber',
@@ -604,6 +826,15 @@ export default function GISPage() {
                       Length: {Math.round(calculateCableLength(drawingPoints))}m
                     </p>
                   )}
+                  {lastSnappedCable && (
+                    <div className="flex items-center gap-1 text-xs text-green-600 bg-green-50 dark:bg-green-950 px-2 py-1 rounded">
+                      <div className="w-2 h-2 bg-green-500 rounded-full" />
+                      Connected to: {lastSnappedCable}
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground italic">
+                    Tip: Click near green dots to snap to existing cables
+                  </p>
                   <div className="flex gap-2">
                     <Button
                       size="sm"
@@ -693,21 +924,75 @@ export default function GISPage() {
           </Card>
 
           {/* Stats */}
-          <Card>
+          <Card className={autoSync ? 'ring-1 ring-green-500/30' : ''}>
             <CardHeader className="py-3">
-              <CardTitle className="flex items-center space-x-2 text-base">
-                <Users className="h-4 w-4" />
-                <span>Stats</span>
+              <CardTitle className="flex items-center justify-between text-base">
+                <div className="flex items-center space-x-2">
+                  <Users className="h-4 w-4" />
+                  <span>Stats</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {syncing && (
+                    <RefreshCw className="w-3 h-3 text-blue-500 animate-spin" />
+                  )}
+                  {autoSync && !syncing && (
+                    <div className="flex items-center gap-1">
+                      <Radio className="w-3 h-3 text-green-500 animate-pulse" />
+                      <span className="text-xs text-green-600 font-medium">LIVE</span>
+                    </div>
+                  )}
+                </div>
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
+              {/* Live Status Controls */}
+              <div className="flex items-center justify-between pb-2 mb-2 border-b">
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${syncing ? 'bg-blue-500 animate-ping' : autoSync ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+                  <span className="text-xs text-muted-foreground">
+                    {syncing ? 'Syncing...' : lastSyncTime ? formatLastSyncTime() : 'Not synced'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    onClick={() => syncOnlineStatus(false)}
+                    disabled={syncing}
+                  >
+                    <RefreshCw className={`h-3 w-3 ${syncing ? 'animate-spin' : ''}`} />
+                  </Button>
+                  <Switch
+                    id="gis-auto-sync"
+                    checked={autoSync}
+                    onCheckedChange={setAutoSync}
+                  />
+                  <Label htmlFor="gis-auto-sync" className="text-xs cursor-pointer">Auto</Label>
+                </div>
+              </div>
               <div className="flex justify-between">
-                <span className="flex items-center gap-1"><div className="w-2 h-2 bg-green-500 rounded-full" />Online</span>
-                <span className="font-medium">{stats.online}</span>
+                <span className="flex items-center gap-1"><div className={`w-2 h-2 bg-green-500 rounded-full ${autoSync ? 'animate-pulse' : ''}`} />Online</span>
+                <span className="font-medium text-green-600">{stats.online}</span>
               </div>
               <div className="flex justify-between">
                 <span className="flex items-center gap-1"><div className="w-2 h-2 bg-red-500 rounded-full" />Offline</span>
-                <span className="font-medium">{stats.customers - stats.online}</span>
+                <span className="font-medium text-red-600">{stats.customers - stats.online}</span>
+              </div>
+              <div className="border-t pt-2 mt-2">
+                <div className="flex justify-between">
+                  <span className="flex items-center gap-1"><Cable className="h-3 w-3 text-blue-500" />Total Cable</span>
+                  <span className="font-medium">
+                    {stats.totalCableLength >= 1000
+                      ? `${(stats.totalCableLength / 1000).toFixed(2)} km`
+                      : `${Math.round(stats.totalCableLength)} m`
+                    }
+                  </span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span className="text-xs">Cable segments</span>
+                  <span className="text-xs">{stats.cables}</span>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -727,11 +1012,19 @@ export default function GISPage() {
                 <span>Offline Customer</span>
               </div>
               <div className="flex items-center space-x-2">
-                <div className="w-6 h-1 bg-blue-500 rounded" />
-                <span>Fiber Cable</span>
+                <div className="w-6 h-[2px] bg-blue-500 rounded" />
+                <span>Drop Cable</span>
               </div>
               <div className="flex items-center space-x-2">
-                <div className="w-4 h-4 bg-purple-500 border-2 border-white rounded shadow" />
+                <div className="w-6 h-1 bg-blue-500 rounded" />
+                <span>Fiber/ADSS Cable</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className="w-6 h-1.5 bg-blue-500 rounded" />
+                <span>Trunk Line</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className="w-5 h-5 bg-orange-500 border-2 border-green-500 rounded shadow flex items-center justify-center text-xs">🔌</div>
                 <span>Network Point</span>
               </div>
             </CardContent>
@@ -763,14 +1056,20 @@ export default function GISPage() {
                 customers={customers}
                 fiberCables={fiberCables}
                 labels={labels}
+                networkPoints={networkPoints}
                 drawingMode={drawingMode}
                 drawingPoints={drawingPoints}
                 showLayers={layers}
                 onCustomerClick={(c) => setSelectedCustomer(c)}
                 onCableClick={(c) => setSelectedCable(c)}
                 onLabelClick={(l) => setSelectedLabel(l)}
+                onNetworkPointClick={(p) => setSelectedNetworkPoint(p)}
                 onMapClick={handleMapClick}
                 onLineClick={handleLineClick}
+                onSnapToEndpoint={(cableName) => {
+                  setLastSnappedCable(cableName);
+                  toast({ title: 'Snapped!', description: `Connected to "${cableName}"` });
+                }}
               />
             </CardContent>
           </Card>
@@ -779,7 +1078,7 @@ export default function GISPage() {
 
       {/* Customer Detail Modal */}
       {selectedCustomer && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setSelectedCustomer(null)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]" onClick={() => setSelectedCustomer(null)}>
           <Card className="w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="flex items-center gap-2">
@@ -826,7 +1125,7 @@ export default function GISPage() {
 
       {/* Label Detail Modal */}
       {selectedLabel && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setSelectedLabel(null)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]" onClick={() => setSelectedLabel(null)}>
           <Card className="w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="flex items-center gap-2">
@@ -865,8 +1164,8 @@ export default function GISPage() {
 
       {/* Cable Detail Modal */}
       {selectedCable && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setSelectedCable(null)}>
-          <Card className="w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]" onClick={() => setSelectedCable(null)}>
+          <Card className="w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="flex items-center gap-2">
                 <Cable className="h-5 w-5" />
@@ -880,7 +1179,7 @@ export default function GISPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm text-muted-foreground">Type</p>
-                  <p className="font-medium capitalize">{selectedCable.cable_type}</p>
+                  <p className="font-medium uppercase">{selectedCable.cable_type}</p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Status</p>
@@ -895,6 +1194,10 @@ export default function GISPage() {
                 <div>
                   <p className="text-sm text-muted-foreground">Length</p>
                   <p className="font-medium">{selectedCable.length_meters ? `${selectedCable.length_meters}m` : 'N/A'}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Points</p>
+                  <p className="font-medium">{selectedCable.coordinates.length} points</p>
                 </div>
               </div>
               {selectedCable.description && (
@@ -916,10 +1219,113 @@ export default function GISPage() {
                   </div>
                 </div>
               )}
-              <Button variant="destructive" size="sm" onClick={() => deleteCable(selectedCable.id)}>
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete Cable
-              </Button>
+
+              {/* Cable Edit Actions */}
+              <div className="border-t pt-4 space-y-3">
+                <p className="text-sm font-medium">Edit Cable</p>
+
+                {/* Trim from Start */}
+                {selectedCable.coordinates.length > 2 && (
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm text-muted-foreground flex-1">Trim from start:</p>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => trimCableFromStart(selectedCable, 1)}
+                        title="Remove 1 point from start"
+                      >
+                        -1
+                      </Button>
+                      {selectedCable.coordinates.length > 4 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => trimCableFromStart(selectedCable, 2)}
+                          title="Remove 2 points from start"
+                        >
+                          -2
+                        </Button>
+                      )}
+                      {selectedCable.coordinates.length > 6 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => trimCableFromStart(selectedCable, 5)}
+                          title="Remove 5 points from start"
+                        >
+                          -5
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Trim from End */}
+                {selectedCable.coordinates.length > 2 && (
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm text-muted-foreground flex-1">Trim from end:</p>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => trimCableFromEnd(selectedCable, 1)}
+                        title="Remove 1 point from end"
+                      >
+                        -1
+                      </Button>
+                      {selectedCable.coordinates.length > 4 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => trimCableFromEnd(selectedCable, 2)}
+                          title="Remove 2 points from end"
+                        >
+                          -2
+                        </Button>
+                      )}
+                      {selectedCable.coordinates.length > 6 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => trimCableFromEnd(selectedCable, 5)}
+                          title="Remove 5 points from end"
+                        >
+                          -5
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Split Cable */}
+                {selectedCable.coordinates.length >= 3 && (
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm text-muted-foreground flex-1">Split at middle:</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => splitCableAtPoint(selectedCable, Math.floor(selectedCable.coordinates.length / 2))}
+                      title="Split cable into two parts at the middle"
+                    >
+                      Split Cable
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              {/* Delete Actions */}
+              <div className="border-t pt-4">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => deleteCable(selectedCable.id)}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete Entire Cable
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -927,7 +1333,7 @@ export default function GISPage() {
 
       {/* Add Label Modal */}
       {showAddLabelModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowAddLabelModal(false)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]" onClick={() => setShowAddLabelModal(false)}>
           <Card className="w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="flex items-center gap-2">
@@ -1006,8 +1412,9 @@ export default function GISPage() {
                     value={newCableData.cable_type}
                     onChange={(e) => setNewCableData({ ...newCableData, cable_type: e.target.value })}
                   >
-                    <option value="fiber">Fiber</option>
-                    <option value="drop">Drop Cable</option>
+                    <option value="drop">Drop Cable (thin)</option>
+                    <option value="adss">ADSS Cable</option>
+                    <option value="fiber">Fiber Cable</option>
                     <option value="trunk">Trunk Line</option>
                   </select>
                 </div>
@@ -1301,7 +1708,7 @@ export default function GISPage() {
 
       {/* Network Point Detail Modal */}
       {selectedNetworkPoint && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setSelectedNetworkPoint(null)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]" onClick={() => setSelectedNetworkPoint(null)}>
           <Card className="w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="flex items-center gap-2">

@@ -69,6 +69,15 @@ export const mikrotikApi = {
         return response.json();
     },
 
+    /**
+     * Get all profiles (hotspot + PPPoE) from a router
+     */
+    async getRouterProfiles(routerId: number): Promise<ApiResponse<{ name: string; type: 'HOTSPOT' | 'PPPOE'; rateLimit?: string }[]>> {
+        const response = await fetch(`${MIKROTIK_URL}/api/routers/${routerId}/profiles`);
+        const result = await response.json();
+        return { success: result.success, data: result.profiles, error: result.error };
+    },
+
     // ============================================
     // Hotspot Management
     // ============================================

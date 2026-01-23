@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { Bell, Moon, Sun, User, LogOut, Menu, Search } from "lucide-react";
+import { Bell, Moon, Sun, User, LogOut, Menu, Search, Key, Shield, Building2, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useTheme } from "@/lib/theme";
 import { useAuth } from "@/contexts/auth-context";
+import { ChangePasswordDialog } from "@/components/auth/change-password-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn, formatCurrency } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
 
 interface HeaderProps {
   sidebarCollapsed?: boolean;
@@ -37,11 +39,28 @@ const mockNotifications = [
   { id: 3, title: "New customer", message: "Registration completed", time: "12m ago", type: "info" },
 ];
 
+const roleLabels: Record<string, string> = {
+  super_admin: "Super Admin",
+  nolojia_staff: "Nolojia Staff",
+  full_isp: "ISP Partner",
+  landlord_admin: "Landlord Admin",
+  landlord_staff: "Landlord Staff",
+};
+
+const roleIcons: Record<string, React.ReactNode> = {
+  super_admin: <Shield className="h-3 w-3" />,
+  nolojia_staff: <Shield className="h-3 w-3" />,
+  full_isp: <Globe className="h-3 w-3" />,
+  landlord_admin: <Building2 className="h-3 w-3" />,
+  landlord_staff: <User className="h-3 w-3" />,
+};
+
 export function Header({ sidebarCollapsed, onToggleSidebar, className }: HeaderProps) {
   const { setTheme, resolvedTheme } = useTheme();
-  const { user, logout } = useAuth();
+  const { profile, logout, canAccessAdmin } = useAuth();
   const [globalSearch, setGlobalSearch] = React.useState("");
   const [unreadNotifications, setUnreadNotifications] = React.useState(3);
+  const [showPasswordDialog, setShowPasswordDialog] = React.useState(false);
 
   const handleNotificationClick = () => {
     setUnreadNotifications(0);
@@ -165,16 +184,24 @@ export function Header({ sidebarCollapsed, onToggleSidebar, className }: HeaderP
               <Button variant="ghost" size="icon">
                 <div className="h-8 w-8 rounded-full bg-primary flex items-center justify-center">
                   <span className="text-sm text-primary-foreground font-medium">
-                    {user?.full_name?.charAt(0).toUpperCase() || 'U'}
+                    {profile?.full_name?.charAt(0).toUpperCase() || profile?.email?.charAt(0).toUpperCase() || 'U'}
                   </span>
                 </div>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuContent align="end" className="w-64">
               <DropdownMenuLabel>
-                <div className="flex flex-col">
-                  <span>{user?.full_name || 'User'}</span>
-                  <span className="text-xs text-muted-foreground">{user?.email || ''}</span>
+                <div className="flex flex-col gap-1">
+                  <span className="font-medium">{profile?.full_name || 'User'}</span>
+                  <span className="text-xs text-muted-foreground font-normal">{profile?.email || ''}</span>
+                  {profile?.role && (
+                    <div className="flex items-center gap-1 mt-1">
+                      {roleIcons[profile.role]}
+                      <span className="text-xs text-muted-foreground font-normal">
+                        {roleLabels[profile.role] || profile.role}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
@@ -182,12 +209,23 @@ export function Header({ sidebarCollapsed, onToggleSidebar, className }: HeaderP
                 <User className="mr-2 h-4 w-4" />
                 Profile
               </DropdownMenuItem>
-              <DropdownMenuItem>
-                <Bell className="mr-2 h-4 w-4" />
-                Notifications
+              <DropdownMenuItem onClick={() => setShowPasswordDialog(true)}>
+                <Key className="mr-2 h-4 w-4" />
+                Change Password
               </DropdownMenuItem>
+              {canAccessAdmin && (
+                <>
+                  <DropdownMenuSeparator />
+                  <Link href="/admin/users">
+                    <DropdownMenuItem>
+                      <Shield className="mr-2 h-4 w-4" />
+                      Admin Portal
+                    </DropdownMenuItem>
+                  </Link>
+                </>
+              )}
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleLogout}>
+              <DropdownMenuItem onClick={handleLogout} className="text-red-600">
                 <LogOut className="mr-2 h-4 w-4" />
                 Sign out
               </DropdownMenuItem>
@@ -195,6 +233,12 @@ export function Header({ sidebarCollapsed, onToggleSidebar, className }: HeaderP
           </DropdownMenu>
         </div>
       </div>
+
+      {/* Password Change Dialog */}
+      <ChangePasswordDialog
+        open={showPasswordDialog}
+        onOpenChange={setShowPasswordDialog}
+      />
     </header>
   );
 }

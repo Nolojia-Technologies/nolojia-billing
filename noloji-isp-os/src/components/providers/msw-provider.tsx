@@ -6,52 +6,30 @@ interface MSWProviderProps {
   children: React.ReactNode;
 }
 
+// Non-blocking MSW initialization - app renders immediately
 export function MSWProvider({ children }: MSWProviderProps) {
-  const [mswReady, setMSWReady] = React.useState(false);
-
   React.useEffect(() => {
-    async function initializeMSW() {
-      if (
-        typeof window !== 'undefined' &&
-        process.env.NODE_ENV === 'development' &&
-        process.env.NEXT_PUBLIC_MSW_ENABLED === 'true'
-      ) {
-        try {
-          const { worker } = await import('@/mocks/browser');
-
-          await worker.start({
-            onUnhandledRequest: 'warn',
+    // Only initialize MSW in development when explicitly enabled
+    if (
+      typeof window !== 'undefined' &&
+      process.env.NODE_ENV === 'development' &&
+      process.env.NEXT_PUBLIC_MSW_ENABLED === 'true'
+    ) {
+      // Initialize MSW in the background - don't block rendering
+      import('@/mocks/browser')
+        .then(({ worker }) => {
+          worker.start({
+            onUnhandledRequest: 'bypass', // Don't warn on unhandled requests
+            quiet: true, // Reduce console noise
           });
-
-          console.log('🔶 MSW worker started successfully');
-          setMSWReady(true);
-        } catch (error) {
+          console.log('🔶 MSW worker started');
+        })
+        .catch((error) => {
           console.error('Failed to start MSW worker:', error);
-          setMSWReady(true); // Continue anyway
-        }
-      } else {
-        setMSWReady(true);
-      }
+        });
     }
-
-    initializeMSW();
   }, []);
 
-  // In development with MSW enabled, wait for MSW to be ready
-  if (
-    process.env.NODE_ENV === 'development' &&
-    process.env.NEXT_PUBLIC_MSW_ENABLED === 'true' &&
-    !mswReady
-  ) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Initializing mock API...</p>
-        </div>
-      </div>
-    );
-  }
-
+  // Always render children immediately - no blocking
   return <>{children}</>;
 }
