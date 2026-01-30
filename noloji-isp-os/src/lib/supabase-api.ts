@@ -369,7 +369,7 @@ export const supabaseVoucherApi = {
 
         for (let i = 0; i < params.quantity; i++) {
             const code = generateVoucherCode(12);
-            const pin = params.include_pin ? generateVoucherCode(4, true) : null;
+            const pin = params.include_pin ? generateVoucherCode(4, true) : undefined;
 
             vouchers.push({
                 code,
@@ -379,10 +379,10 @@ export const supabaseVoucherApi = {
                 status: 'active',
                 valid_from: new Date().toISOString(),
                 valid_until: validUntil.toISOString(),
-                used_by: null,
-                used_at: null,
+                used_by: undefined,
+                used_at: undefined,
                 created_by: 'admin',
-                notes: null,
+                notes: undefined,
                 created_at: new Date().toISOString()
             });
         }

@@ -128,7 +128,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
           fetchUserProfile(currentSession.user.id, {
             email: currentSession.user.email,
-            role: roleData.role as UserRole,
+            role: roleData.role as unknown as UserRole,
             full_name: roleData.full_name || undefined,
           });
         } else {

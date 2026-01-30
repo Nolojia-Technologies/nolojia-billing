@@ -335,14 +335,19 @@ export class EnforcementService {
       .eq('id', customerId)
       .single();
 
-    if (!customer?.unit?.building?.router_assignments?.[0]?.router_id) {
+    // Access safely using any cast because types are inferred as arrays for joins
+    const anyCustomer = customer as any;
+    const routerId = anyCustomer?.unit?.[0]?.building?.[0]?.router_assignments?.[0]?.router_id ||
+      anyCustomer?.unit?.building?.router_assignments?.[0]?.router_id;
+
+    if (!routerId) {
       console.error('[Enforcement] Could not find router for customer:', customerId);
       return;
     }
 
     await supabase.from('enforcement_queue').insert({
       customer_id: customerId,
-      router_id: customer.unit.building.router_assignments[0].router_id,
+      router_id: routerId,
       action: 'disable',
       payload: { reason }
     });
@@ -366,14 +371,18 @@ export class EnforcementService {
       .eq('id', customerId)
       .single();
 
-    if (!customer?.unit?.building?.router_assignments?.[0]?.router_id) {
+    const anyCustomer = customer as any;
+    const routerId = anyCustomer?.unit?.[0]?.building?.[0]?.router_assignments?.[0]?.router_id ||
+      anyCustomer?.unit?.building?.router_assignments?.[0]?.router_id;
+
+    if (!routerId) {
       console.error('[Enforcement] Could not find router for customer:', customerId);
       return;
     }
 
     await supabase.from('enforcement_queue').insert({
       customer_id: customerId,
-      router_id: customer.unit.building.router_assignments[0].router_id,
+      router_id: routerId,
       action: 'enable',
       payload: {}
     });

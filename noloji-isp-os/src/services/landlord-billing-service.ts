@@ -72,7 +72,7 @@ export class LandlordBillingService {
       }
 
       // Calculate revenue split
-      const commissionRate = customer.landlord?.commission_rate || 30;
+      const commissionRate = (customer.landlord as any)?.commission_rate || 30;
       const nolojiaShare = (paymentData.amount * commissionRate) / 100;
       const landlordShare = paymentData.amount - nolojiaShare;
 

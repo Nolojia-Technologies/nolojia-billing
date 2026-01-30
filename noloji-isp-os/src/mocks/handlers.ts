@@ -24,7 +24,7 @@ import {
 const delay = (ms: number = 500) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Helper function for paginated responses
-function paginate<T>(
+function paginate<T extends object>(
   data: T[],
   page: number = 1,
   limit: number = 10,
@@ -540,7 +540,7 @@ add max-limit=${device.config?.bandwidth.upload || 2}M/${device.config?.bandwidt
 
   http.post('/api/gis/routes', async ({ request }) => {
     await delay(1000);
-    const body = await request.json();
+    const body = await request.json() as any;
 
     const newRoute = {
       id: `route_${Date.now()}`,

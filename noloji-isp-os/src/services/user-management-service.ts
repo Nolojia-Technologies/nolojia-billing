@@ -1,7 +1,8 @@
 // User Management Service for Admin
 // Handles user creation, password management, and role assignment
 
-import { supabase } from '@/lib/supabase';
+import { supabase as supabaseTyped } from '@/lib/supabase';
+const supabase = supabaseTyped as any;
 import type { UserRole, User } from '@/types/landlord';
 
 export interface CreateUserInput {
@@ -89,7 +90,7 @@ export const userManagementService = {
     // Update the landlord_users record with the correct role
     // The trigger should have created a basic record, now we update it
     const { data: userData, error: updateError } = await supabase
-      .from('landlord_users')
+      .from('landlord_users' as any)
       .update({
         full_name: input.full_name,
         phone: input.phone,
@@ -105,7 +106,7 @@ export const userManagementService = {
     if (updateError) {
       // If update fails, the trigger might not have run yet, try insert
       const { data: insertData, error: insertError } = await supabase
-        .from('landlord_users')
+        .from('landlord_users' as any)
         .insert({
           id: authData.user.id,
           email: input.email,
@@ -123,14 +124,22 @@ export const userManagementService = {
         throw new Error(`Failed to create user profile: ${insertError.message}`);
       }
 
+      if (!insertData) {
+        throw new Error('Failed to create user profile - no data returned');
+      }
+
       return {
-        ...insertData,
+        ...(insertData as any),
         temporary_password: temporaryPassword,
       } as UserWithCredentials;
     }
 
+    if (!userData) {
+      throw new Error('Failed to update user profile - no data returned');
+    }
+
     return {
-      ...userData,
+      ...(userData as any),
       temporary_password: temporaryPassword,
     } as UserWithCredentials;
   },
@@ -146,7 +155,7 @@ export const userManagementService = {
     search?: string;
   }): Promise<User[]> => {
     let query = supabase
-      .from('landlord_users')
+      .from('landlord_users' as any)
       .select('*, organization:organizations(*), landlord:landlords(*)');
 
     if (filters?.role) {
@@ -185,7 +194,7 @@ export const userManagementService = {
    */
   getUserById: async (userId: string): Promise<User | null> => {
     const { data, error } = await supabase
-      .from('landlord_users')
+      .from('landlord_users' as any)
       .select('*, organization:organizations(*), landlord:landlords(*)')
       .eq('id', userId)
       .single();
@@ -205,7 +214,7 @@ export const userManagementService = {
    */
   updateUser: async (userId: string, input: UpdateUserInput): Promise<User> => {
     const { data, error } = await supabase
-      .from('landlord_users')
+      .from('landlord_users' as any)
       .update({
         ...input,
         updated_at: new Date().toISOString(),
@@ -226,7 +235,7 @@ export const userManagementService = {
    */
   deactivateUser: async (userId: string): Promise<void> => {
     const { error } = await supabase
-      .from('landlord_users')
+      .from('landlord_users' as any)
       .update({
         is_active: false,
         updated_at: new Date().toISOString(),
@@ -243,7 +252,7 @@ export const userManagementService = {
    */
   reactivateUser: async (userId: string): Promise<void> => {
     const { error } = await supabase
-      .from('landlord_users')
+      .from('landlord_users' as any)
       .update({
         is_active: true,
         updated_at: new Date().toISOString(),
@@ -264,7 +273,7 @@ export const userManagementService = {
 
     // Get user email first
     const { data: userData, error: fetchError } = await supabase
-      .from('landlord_users')
+      .from('landlord_users' as any)
       .select('email')
       .eq('id', userId)
       .single();
@@ -312,7 +321,7 @@ export const userManagementService = {
     }
 
     const { data, error } = await supabase
-      .from('landlord_users')
+      .from('landlord_users' as any)
       .select('*, organization:organizations(*), landlord:landlords(*)')
       .eq('id', user.id)
       .single();
@@ -332,7 +341,7 @@ export const userManagementService = {
    */
   updateLastLogin: async (userId: string): Promise<void> => {
     await supabase
-      .from('landlord_users')
+      .from('landlord_users' as any)
       .update({ last_login: new Date().toISOString() })
       .eq('id', userId);
   },
@@ -342,7 +351,7 @@ export const userManagementService = {
    */
   getUsersByRole: async (role: UserRole): Promise<User[]> => {
     const { data, error } = await supabase
-      .from('landlord_users')
+      .from('landlord_users' as any)
       .select('id, email, full_name, role')
       .eq('role', role)
       .eq('is_active', true)

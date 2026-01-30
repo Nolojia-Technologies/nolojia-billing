@@ -56,13 +56,13 @@ export default function PackagesPage() {
 
       const payload = {
         ...formData,
-        upload_speed: formData.upload_speed ? parseInt(formData.upload_speed) : null,
-        download_speed: formData.download_speed ? parseInt(formData.download_speed) : null,
-        price: formData.price ? parseFloat(formData.price) : null,
+        upload_speed: formData.upload_speed ? parseInt(formData.upload_speed) : undefined,
+        download_speed: formData.download_speed ? parseInt(formData.download_speed) : undefined,
+        price: formData.price ? parseFloat(formData.price) : undefined,
         validity_days: formData.validity_days ? parseInt(formData.validity_days) : 30,
-        data_limit_mb: formData.data_limit_mb ? parseInt(formData.data_limit_mb) : null,
-        session_timeout: formData.session_timeout ? parseInt(formData.session_timeout) : null,
-        idle_timeout: formData.idle_timeout ? parseInt(formData.idle_timeout) : null
+        data_limit_mb: formData.data_limit_mb ? parseInt(formData.data_limit_mb) : undefined,
+        session_timeout: formData.session_timeout ? parseInt(formData.session_timeout) : undefined,
+        idle_timeout: formData.idle_timeout ? parseInt(formData.idle_timeout) : undefined
       };
 
       let savedPackage;

@@ -101,7 +101,6 @@ export default function CustomersPage() {
               title: 'Sync Completed with Errors',
               description: `Synced, but failed to connect to ${result.errors.length} router(s):\n${errorDetails}`,
               variant: 'destructive',
-              duration: 5000
             });
           }
         } else {

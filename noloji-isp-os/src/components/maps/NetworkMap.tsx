@@ -115,6 +115,7 @@ function NetworkMapClient({
         const loadLeaflet = async () => {
             try {
                 // Import leaflet CSS
+                // @ts-ignore
                 await import('leaflet/dist/leaflet.css');
 
                 // Import modules

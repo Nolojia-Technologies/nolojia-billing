@@ -62,7 +62,7 @@ interface Customer {
   address?: string;
   phone?: string;
   connection_type?: string;
-  plans?: { name: string };
+  plans?: any;
 }
 
 interface FiberCable {

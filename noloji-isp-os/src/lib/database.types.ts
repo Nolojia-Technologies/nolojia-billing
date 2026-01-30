@@ -202,3 +202,87 @@ export interface CreateTemplateRequest {
     content: string;
     variables?: string[];
 }
+
+export type Json =
+    | string
+    | number
+    | boolean
+    | null
+    | { [key: string]: Json | undefined }
+    | Json[]
+
+export interface Database {
+    public: {
+        Tables: {
+            admins: {
+                Row: Admin
+                Insert: Admin // Simplified for now, traditionally Omit<Admin, 'id' ...>
+                Update: Partial<Admin>
+            }
+            customers: {
+                Row: Customer
+                Insert: Customer
+                Update: Partial<Customer>
+            }
+            plans: {
+                Row: Plan
+                Insert: Plan
+                Update: Partial<Plan>
+            }
+            routers: {
+                Row: Router
+                Insert: Router
+                Update: Partial<Router>
+            }
+            sessions: {
+                Row: Session
+                Insert: Session
+                Update: Partial<Session>
+            }
+            sms_credits: {
+                Row: SmsCredit
+                Insert: SmsCredit
+                Update: Partial<SmsCredit>
+            }
+            sms_logs: {
+                Row: SmsLog
+                Insert: SmsLog
+                Update: Partial<SmsLog>
+            }
+            sms_templates: {
+                Row: SmsTemplate
+                Insert: SmsTemplate
+                Update: Partial<SmsTemplate>
+            }
+            vouchers: {
+                Row: Voucher
+                Insert: Voucher
+                Update: Partial<Voucher>
+            }
+            landlord_users: {
+                Row: any
+                Insert: any
+                Update: any
+            }
+            organizations: {
+                Row: any
+                Insert: any
+                Update: any
+            }
+            landlords: {
+                Row: any
+                Insert: any
+                Update: any
+            }
+        }
+        Views: {
+            [_ in never]: never
+        }
+        Functions: {
+            [_ in never]: never
+        }
+        Enums: {
+            [_ in never]: never
+        }
+    }
+}

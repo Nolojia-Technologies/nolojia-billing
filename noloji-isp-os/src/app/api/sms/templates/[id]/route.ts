@@ -9,10 +9,11 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 // PUT: Update template
 export async function PUT(
     request: NextRequest,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
+    const { id: paramId } = await params;
     try {
-        const id = parseInt(params.id);
+        const id = parseInt(paramId);
         if (isNaN(id)) {
             return NextResponse.json(
                 { success: false, error: 'Invalid template ID' },
@@ -59,10 +60,11 @@ export async function PUT(
 // DELETE: Delete template
 export async function DELETE(
     request: NextRequest,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
+    const { id: paramId } = await params;
     try {
-        const id = parseInt(params.id);
+        const id = parseInt(paramId);
         if (isNaN(id)) {
             return NextResponse.json(
                 { success: false, error: 'Invalid template ID' },
